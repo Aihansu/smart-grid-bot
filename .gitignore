@@ -1,0 +1,7 @@
+.env
+state_v2_9.json
+state_v2_9.json.tmp
+__pycache__/
+*.pyc
+.DS_Store
+.claude/
