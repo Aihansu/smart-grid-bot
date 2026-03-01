@@ -46,8 +46,18 @@ TRAILING_CALLBACK_PCT = 0.3      # Sell when price drops 0.3% from peak
 
 HYBRID_MODE = True
 EMA_PERIOD = 30
-DIP_TOLERANCE_PCT = -2
-HARD_STOP_PCT = -4
+
+# EMA Dynamic Buy Zones
+EMA_ZONE_WEAK = -0.7         # 0% to -0.7%: weak signal (0.75x)
+EMA_ZONE_NORMAL = -1.3       # -0.7% to -1.3%: normal signal (1x)
+EMA_ZONE_STRONG = -2         # -1.3% to -2%: strong dip (1.5x)
+EMA_ABOVE_MULTIPLIER = 0.5   # Above EMA: expensive, buy less
+EMA_WEAK_MULTIPLIER = 0.75   # Slight dip: buy a bit more
+EMA_NORMAL_MULTIPLIER = 1.0  # Normal dip: standard buy
+EMA_STRONG_MULTIPLIER = 1.5  # Strong dip: buy aggressively
+
+DIP_TOLERANCE_PCT = -2        # Buy limit
+HARD_STOP_PCT = -4            # Crash protection
 
 # Auto Grid Reset
 AUTO_GRID_RESET = True

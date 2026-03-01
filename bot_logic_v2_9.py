@@ -452,19 +452,23 @@ class SmartGridBotDCA_v2_9:
         return ema
 
     def check_hybrid_filter(self, current_price):
-        if not config.HYBRID_MODE or self.ema_value is None: return True, "ok"
+        if not config.HYBRID_MODE or self.ema_value is None: return True, "ok", 1.0
         deviation = ((current_price - self.ema_value) / self.ema_value) * 100
-        if deviation >= 0: return True, "above_ema"
-        if deviation >= config.DIP_TOLERANCE_PCT: return True, "dip_buy"
-        if deviation >= config.HARD_STOP_PCT: return False, "caution"
-        return False, "hard_stop"
+        if deviation >= 0: return True, "above_ema", config.EMA_ABOVE_MULTIPLIER
+        if deviation >= config.EMA_ZONE_WEAK: return True, "weak_dip", config.EMA_WEAK_MULTIPLIER
+        if deviation >= config.EMA_ZONE_NORMAL: return True, "normal_dip", config.EMA_NORMAL_MULTIPLIER
+        if deviation >= config.EMA_ZONE_STRONG: return True, "strong_dip", config.EMA_STRONG_MULTIPLIER
+        return False, "hard_stop", 0
 
     def get_trend_indicator(self, current_price):
         if self.ema_value is None: return "⏳ ..."
         dev = ((current_price - self.ema_value) / self.ema_value) * 100
-        if dev >= 1: return f"📈 Uptrend (+{dev:.1f}%)"
-        if dev >= config.DIP_TOLERANCE_PCT: return f"🎯 Dip Opportunity ({dev:.1f}%)"
-        return f"🔴 Danger ({dev:.1f}%)"
+        if dev >= 1: return f"📈 Uptrend (+{dev:.1f}%) 0.5x"
+        if dev >= 0: return f"📊 Neutral ({dev:.1f}%) 0.5x"
+        if dev >= config.EMA_ZONE_WEAK: return f"🔹 Weak Dip ({dev:.1f}%) 0.75x"
+        if dev >= config.EMA_ZONE_NORMAL: return f"🟢 Normal Dip ({dev:.1f}%) 1x"
+        if dev >= config.EMA_ZONE_STRONG: return f"🔥 Strong Dip ({dev:.1f}%) 1.5x"
+        return f"🔴 Hard Stop ({dev:.1f}%) ❌"
 
     def _create_grids(self, center_price):
         self.grids = []
@@ -493,8 +497,10 @@ class SmartGridBotDCA_v2_9:
             
         self._save_state()
 
-    def _open_position(self, grid, price, timestamp):
-        crypto = grid['amount_usdt'] / price
+    def _open_position(self, grid, price, timestamp, buy_multiplier=1.0):
+        adjusted_amount = grid['amount_usdt'] * buy_multiplier
+        adjusted_amount = max(adjusted_amount, 10.5)  # Binance minimum
+        crypto = adjusted_amount / price
         # Real Order Submission
         if not config.PAPER_TRADING:
             order = self.exchange_handler.place_order(config.SYMBOL, 'buy', crypto)
@@ -533,7 +539,7 @@ class SmartGridBotDCA_v2_9:
             
         else:
             # Paper Trading
-            cost = grid['amount_usdt']
+            cost = adjusted_amount
             fee = cost * 0.001
             self.virtual_balance -= (cost + fee)
             self.virtual_crypto += crypto
@@ -567,10 +573,19 @@ class SmartGridBotDCA_v2_9:
         self._save_state()
         sell_target = pos['sell_target']
         target_pct = config.TRAILING_PROFIT_PCT
+        # Zone label
+        if buy_multiplier <= 0.5:
+            zone_label = "📈 Above EMA"
+        elif buy_multiplier <= 0.75:
+            zone_label = "🔹 Weak Dip"
+        elif buy_multiplier >= 1.5:
+            zone_label = "🔥 Strong Dip"
+        else:
+            zone_label = "🟢 Normal"
         msg = (f"━━━━━━━━━━━━━━━━━━━\n"
                f"🟢 <b>BUY</b> #{pos['id']}\n"
                f"━━━━━━━━━━━━━━━━━━━\n"
-               f"💵 Amount: ${cost:.2f}\n"
+               f"💵 Amount: ${cost:.2f} ({buy_multiplier}x {zone_label})\n"
                f"📍 Price: ${price:,.2f}\n"
                f"💸 Commission: ${fee:.4f}\n"
                f"🎯 Target: ${sell_target:,.2f} (+{target_pct}%)\n"
@@ -788,7 +803,7 @@ class SmartGridBotDCA_v2_9:
                 pass
 
         # 2. Check Grids (Buy)
-        can_buy, buy_reason = self.check_hybrid_filter(curr_price)
+        can_buy, buy_reason, buy_multiplier = self.check_hybrid_filter(curr_price)
         
         # Trend Notification (One-time)
         if not can_buy and not self.trend_block_notified:
@@ -824,8 +839,10 @@ class SmartGridBotDCA_v2_9:
                     if can_buy:
                         if len(self.open_positions) >= config.MAX_OPEN_POSITIONS:
                             break  # Check limit inside loop as well
-                        if self.virtual_balance >= grid['amount_usdt']:
-                            self._open_position(grid, curr_price, timestamp)
+                        adjusted_amount = grid['amount_usdt'] * buy_multiplier
+                        adjusted_amount = max(adjusted_amount, 10.5)  # Binance minimum
+                        if self.virtual_balance >= adjusted_amount:
+                            self._open_position(grid, curr_price, timestamp, buy_multiplier)
                         elif config.ENABLE_REBALANCING:
                             # If balance insufficient and Rebalancing feature is active, check
                             self._check_for_rebalancing_swap(grid, curr_price, timestamp)
