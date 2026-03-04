@@ -7,11 +7,23 @@ Automated grid trading bot for Binance. Buys dips, sells peaks with trailing sto
 - Creates **10 grid levels** across a price range (2.5% spread)
 - **Buys** when price drops to a grid level
 - **Trailing stop** locks profit: activates at +1.2%, sells on -0.3% from peak
-- **EMA trend filter** blocks buys during sharp crashes
+- **EMA Dynamic Buy Zones** — adjusts buy amounts based on distance from EMA (buy less near EMA, buy more on deep dips)
 - **DCA mode** — no stop loss, accumulates on dips
 - **Auto compound** — reinvests profits into larger grid amounts
 - **Orphan system** — old positions trade independently after grid reset
 - **Rebalancing** — sacrifices worst position to buy lower when balance depleted
+
+## EMA Dynamic Buy Zones
+
+The bot adjusts buy amounts based on how far the price has dropped from the EMA (Exponential Moving Average). Closer to EMA = buy less, deeper dip = buy more.
+
+| Zone | EMA Distance | Multiplier | Meaning |
+|------|-------------|------------|---------|
+| 📈 Above EMA | > 0% | 0.5x | Price is expensive, buy less |
+| 🔹 Weak Dip | 0% to -0.7% | 0.75x | Small dip, conserve capital |
+| 🟢 Normal Dip | -0.7% to -1.3% | 1.0x | Standard buy amount |
+| 🔥 Strong Dip | -1.3% to -2% | 1.5x | Deep dip, buy aggressively |
+| 🔴 Hard Stop | below -2% | 0x | Crash protection, no buy |
 
 ## Quick Start
 
@@ -24,7 +36,7 @@ Automated grid trading bot for Binance. Buys dips, sells peaks with trailing sto
 ### 2. Install
 
 ```bash
-git clone <repo-url> smart_grid_bot
+git clone https://github.com/Aihansu/smart-grid-bot.git smart_grid_bot
 cd smart_grid_bot
 pip install -r requirements.txt
 ```
@@ -102,6 +114,11 @@ screen -S gridbot python3 main_v2_9.py
 | `MAX_OPEN_POSITIONS` | 25 | Max open positions |
 | `ENABLE_REBALANCING` | True | Enable rebalancing |
 | `AUTO_COMPOUND` | True | Reinvest profits |
+| `EMA_PERIOD` | 30 | EMA calculation period |
+| `EMA_ABOVE_MULTIPLIER` | 0.5 | Buy multiplier above EMA |
+| `EMA_WEAK_MULTIPLIER` | 0.75 | Buy multiplier for weak dip |
+| `EMA_NORMAL_MULTIPLIER` | 1.0 | Buy multiplier for normal dip |
+| `EMA_STRONG_MULTIPLIER` | 1.5 | Buy multiplier for strong dip |
 
 ## Tips
 
