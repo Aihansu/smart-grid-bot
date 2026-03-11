@@ -1,6 +1,6 @@
 .env
-state_v2_9.json
-state_v2_9.json.tmp
+state_v3_0.json
+state_v3_0.json.tmp
 __pycache__/
 *.pyc
 .DS_Store

@@ -56,9 +56,6 @@ EMA_WEAK_MULTIPLIER = 0.75   # Slight dip: buy a bit more
 EMA_NORMAL_MULTIPLIER = 1.0  # Normal dip: standard buy
 EMA_STRONG_MULTIPLIER = 1.5  # Strong dip: buy aggressively
 
-DIP_TOLERANCE_PCT = -2        # Buy limit
-HARD_STOP_PCT = -4            # Crash protection
-
 # Auto Grid Reset
 AUTO_GRID_RESET = True
 GRID_OUT_OF_RANGE_PCT = 2

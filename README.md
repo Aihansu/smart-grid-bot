@@ -1,4 +1,4 @@
-# Smart Grid Bot v2.9
+# Smart Grid Bot v3.0
 
 Automated grid trading bot for Binance. Buys dips, sells peaks with trailing stop. Runs 24/7, controlled via Telegram.
 
@@ -74,13 +74,13 @@ PAPER_TRADING = True     # Start with True to test without real money!
 ### 5. Run
 
 ```bash
-python3 main_v2_9.py
+python3 main_v3_0.py
 ```
 
 For 24/7 on a server:
 
 ```bash
-screen -S gridbot python3 main_v2_9.py
+screen -S gridbot python3 main_v3_0.py
 # Detach: Ctrl+A, D
 # Reattach: screen -r gridbot
 ```
@@ -150,7 +150,7 @@ cp .env.example .env
 nano .env
 
 # Run in background
-screen -dmS gridbot python3 main_v2_9.py
+screen -dmS gridbot python3 main_v3_0.py
 
 # Check status
 screen -r gridbot

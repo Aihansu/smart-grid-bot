@@ -12,10 +12,10 @@ from utils import Colors
 from exchange_handler import ExchangeHandler
 import telegram_handler
 
-class SmartGridBotDCA_v2_9:
+class SmartGridBotDCA_v3_0:
     def __init__(self):
-        self.version = "2.9"
-        self.state_file = "state_v2_9.json"
+        self.version = "3.0"
+        self.state_file = "state_v3_0.json"
         self.running = True
         self.paused = False
         self.show_grid = config.SHOW_GRID_TABLE
@@ -30,8 +30,8 @@ class SmartGridBotDCA_v2_9:
         self.exchange = self.exchange_handler.exchange
         
         # Default initialization
-        self.virtual_balance = config.INVESTMENT
-        self.virtual_crypto = 0.0
+        self.balance_usdt = config.INVESTMENT
+        self.balance_eth = 0.0
         
         self.grids = []
         self.open_positions = []
@@ -64,7 +64,7 @@ class SmartGridBotDCA_v2_9:
             # 1. USDT Balance
             real_usdt = self.exchange_handler.get_balance('USDT')
             if real_usdt > 0:
-                self.virtual_balance = real_usdt
+                self.balance_usdt = real_usdt
                 print(f"   {Colors.success(f'✅ Real Balance (USDT): ${real_usdt:.2f}')}")
 
             # 2. Crypto Balance (ETH, etc.)
@@ -73,7 +73,7 @@ class SmartGridBotDCA_v2_9:
             # Can be 0.0 but usually there is some amount.
             # Note: We only sync if balance exists.
             if real_crypto >= 0:
-                self.virtual_crypto = real_crypto
+                self.balance_eth = real_crypto
                 print(f"   {Colors.success(f'✅ Real Crypto ({base_asset}): {real_crypto}')}")
 
             self._save_state() # Save new balances immediately
@@ -87,8 +87,8 @@ class SmartGridBotDCA_v2_9:
     def _save_state(self):
         """Save bot state to file"""
         state = {
-            'virtual_balance': self.virtual_balance,
-            'virtual_crypto': self.virtual_crypto,
+            'virtual_balance': self.balance_usdt,
+            'virtual_crypto': self.balance_eth,
             'open_positions': self.open_positions,
             'position_counter': self.position_counter,
             'total_profit': self.total_profit,
@@ -114,8 +114,8 @@ class SmartGridBotDCA_v2_9:
             try:
                 with open(self.state_file, 'r') as f:
                     state = json.load(f)
-                    self.virtual_balance = state.get('virtual_balance', config.INVESTMENT)
-                    self.virtual_crypto = state.get('virtual_crypto', 0.0)
+                    self.balance_usdt = state.get('virtual_balance', config.INVESTMENT)
+                    self.balance_eth = state.get('virtual_crypto', 0.0)
                     self.open_positions = state.get('open_positions', [])
                     self.position_counter = state.get('position_counter', 0)
                     self.total_profit = state.get('total_profit', 0.0)
@@ -247,7 +247,7 @@ class SmartGridBotDCA_v2_9:
 
     def _cmd_status(self):
         if not self.current_price: return telegram_handler.send_telegram("❌ Could not fetch price!")
-        total_value = self.virtual_balance + (self.virtual_crypto * self.current_price)
+        total_value = self.balance_usdt + (self.balance_eth * self.current_price)
         pnl = total_value - config.INVESTMENT
         pnl_pct = (pnl / config.INVESTMENT) * 100 if config.INVESTMENT > 0 else 0
         runtime = str(datetime.now() - self.start_time).split('.')[0]
@@ -262,14 +262,20 @@ class SmartGridBotDCA_v2_9:
         commission_source = "Binance" if real_commission is not None else "Estimate"
 
         base_asset = config.SYMBOL.split('/')[0]
-        crypto_value = self.virtual_crypto * self.current_price
+        crypto_value = self.balance_eth * self.current_price
+
+        bnb_balance = self.exchange_handler.get_balance('BNB')
+        bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
+        bnb_usd = bnb_balance * bnb_price if bnb_balance > 0 and bnb_price else 0
+        bnb_str = f"{bnb_balance:.4f} (~${bnb_usd:.2f}) {'⚠️' if bnb_usd < 5 else ''}"
 
         ema_str = f"{self.ema_value:,.2f}" if self.ema_value else "0.00"
         msg = (f"📊 <b>BOT STATUS</b> {'⏸️' if self.paused else '✅'}\n\n"
                f"💰 <b>Price:</b> ${self.current_price:,.2f} | 📈 <b>EMA:</b> ${ema_str}\n"
                f"──────────────────\n"
-               f"💵 <b>Balance (USDT):</b> ${self.virtual_balance:.2f}\n"
-               f"🪙 <b>{base_asset}:</b> {self.virtual_crypto:.6f} (${crypto_value:.2f})\n"
+               f"💵 <b>Balance (USDT):</b> ${self.balance_usdt:.2f}\n"
+               f"🪙 <b>{base_asset}:</b> {self.balance_eth:.6f} (${crypto_value:.2f})\n"
+               f"🔶 <b>BNB (Fee):</b> {bnb_str}\n"
                f"📊 <b>Total Portfolio:</b> ${total_value:.2f}\n"
                f"{'📈' if pnl >= 0 else '📉'} <b>Overall P/L:</b> ${pnl:+.2f} ({pnl_pct:+.2f}%)\n"
                f"──────────────────\n"
@@ -477,7 +483,7 @@ class SmartGridBotDCA_v2_9:
         if config.AUTO_COMPOUND:
             # Only distribute current USDT balance across grids
             # Orphan positions' value is already held as ETH
-            available_for_grids = self.virtual_balance
+            available_for_grids = self.balance_usdt
             amount_per_grid = available_for_grids / config.GRID_COUNT
         else:
             amount_per_grid = config.INVESTMENT / config.GRID_COUNT
@@ -534,15 +540,15 @@ class SmartGridBotDCA_v2_9:
             else:
                 fee = cost * 0.00075
 
-            self.virtual_balance -= cost
-            self.virtual_crypto += crypto
+            self.balance_usdt -= cost
+            self.balance_eth += crypto
             
         else:
             # Paper Trading
             cost = adjusted_amount
             fee = cost * 0.001
-            self.virtual_balance -= (cost + fee)
-            self.virtual_crypto += crypto
+            self.balance_usdt -= (cost + fee)
+            self.balance_eth += crypto
 
         self.total_commission += fee
         self.stats['daily_stats']['commission'] += fee
@@ -650,14 +656,14 @@ class SmartGridBotDCA_v2_9:
                 # Approximate fee for statistics (if BNB)
                 fee = usdt_val * 0.00075
 
-            self.virtual_balance += net_usdt
-            self.virtual_crypto -= sell_amount
+            self.balance_usdt += net_usdt
+            self.balance_eth -= sell_amount
 
         else:
             fee = usdt_val * 0.001
             net_usdt = usdt_val - fee
-            self.virtual_balance += net_usdt
-            self.virtual_crypto -= sell_amount
+            self.balance_usdt += net_usdt
+            self.balance_eth -= sell_amount
 
         profit = net_usdt - pos.get('entry_cost', pos['buy_price'] * pos['crypto_amount'])
         self.total_commission += fee
@@ -715,27 +721,46 @@ class SmartGridBotDCA_v2_9:
             base_asset = config.SYMBOL.split('/')[0]
             real_crypto = self.exchange_handler.get_balance(base_asset)
 
-            usdt_diff = abs(real_usdt - self.virtual_balance)
-            crypto_diff = abs(real_crypto - self.virtual_crypto)
+            usdt_diff = abs(real_usdt - self.balance_usdt)
+            crypto_diff = abs(real_crypto - self.balance_eth)
 
             # Only update if there is a meaningful difference (USDT $0.10+, ETH 0.00001+)
             if usdt_diff > 0.10 or crypto_diff > 0.00001:
-                self.virtual_balance = real_usdt
-                self.virtual_crypto = real_crypto
+                self.balance_usdt = real_usdt
+                self.balance_eth = real_crypto
                 self._save_state()
                 print(f"\n{Colors.info('🔄 Balance synced: $' + f'{real_usdt:.2f}' + ' USDT, ' + f'{real_crypto:.6f}' + ' ' + base_asset)}")
 
-            # BNB balance check - warn if low
+            # BNB balance check - auto-buy if low
             bnb_balance = self.exchange_handler.get_balance('BNB')
-            bnb_usd = bnb_balance * self.exchange_handler.get_current_price('BNB/USDT') if bnb_balance > 0 else 0
-            if bnb_usd < 2.0:
+            bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
+            bnb_usd = bnb_balance * bnb_price if bnb_balance > 0 and bnb_price else 0
+            if bnb_usd < 5.0:
                 if not self.bnb_low_notified:
-                    msg = (f"⚠️ <b>BNB LOW</b>\n"
-                           f"──────────────────\n"
-                           f"💰 BNB: {bnb_balance:.5f} (~${bnb_usd:.2f})\n"
-                           f"📉 Commission discount may expire!\n"
-                           f"💡 Top up BNB on Binance.")
-                    telegram_handler.send_telegram(msg)
+                    if self.balance_usdt > 100 and bnb_price:
+                        buy_usd = 20.0
+                        bnb_amount = round(buy_usd / bnb_price, 3)
+                        order = self.exchange_handler.place_order('BNB/USDT', 'buy', bnb_amount)
+                        if order:
+                            msg = (f"🤖 <b>BNB AUTO-PURCHASED</b>\n"
+                                   f"──────────────────\n"
+                                   f"💰 Bought: {bnb_amount:.3f} BNB (~${buy_usd:.2f})\n"
+                                   f"📊 Previous BNB: {bnb_balance:.5f} (~${bnb_usd:.2f})\n"
+                                   f"💡 Purchased to maintain commission discount.")
+                            telegram_handler.send_telegram(msg)
+                        else:
+                            msg = (f"⚠️ <b>BNB PURCHASE FAILED</b>\n"
+                                   f"──────────────────\n"
+                                   f"💰 BNB: {bnb_balance:.5f} (~${bnb_usd:.2f})\n"
+                                   f"💡 Please top up BNB manually.")
+                            telegram_handler.send_telegram(msg)
+                    else:
+                        msg = (f"⚠️ <b>BNB LOW - INSUFFICIENT USDT</b>\n"
+                               f"──────────────────\n"
+                               f"💰 BNB: {bnb_balance:.5f} (~${bnb_usd:.2f})\n"
+                               f"💵 USDT: ${self.balance_usdt:.2f} (insufficient for auto-buy)\n"
+                               f"💡 Please top up BNB manually.")
+                        telegram_handler.send_telegram(msg)
                     self.bnb_low_notified = True
             else:
                 self.bnb_low_notified = False
@@ -841,7 +866,7 @@ class SmartGridBotDCA_v2_9:
                             break  # Check limit inside loop as well
                         adjusted_amount = grid['amount_usdt'] * buy_multiplier
                         adjusted_amount = max(adjusted_amount, 10.5)  # Binance minimum
-                        if self.virtual_balance >= adjusted_amount:
+                        if self.balance_usdt >= adjusted_amount:
                             self._open_position(grid, curr_price, timestamp, buy_multiplier)
                         elif config.ENABLE_REBALANCING:
                             # If balance insufficient and Rebalancing feature is active, check
@@ -858,7 +883,9 @@ class SmartGridBotDCA_v2_9:
         if config.DAILY_REPORT_ENABLED:
             self._check_daily_report()
                     
-        self._print_status(curr_price, timestamp)
+        total = self.balance_usdt + (self.balance_eth * curr_price)
+        pnl = total - config.INVESTMENT
+        print(f"\r[{timestamp}] v{self.version} | Price: ${curr_price:,.2f} | P/L: ${pnl:+.2f} | Pos: {len(self.open_positions)}", end="")
 
     def _check_daily_report(self):
         today = datetime.now(TZ_UTC).strftime("%Y-%m-%d")
@@ -870,7 +897,7 @@ class SmartGridBotDCA_v2_9:
                    f"💸 <b>Commission:</b> ${daily['commission']:.2f}\n"
                    f"🔄 <b>Trade Count:</b> {daily['trades']}\n"
                    f"──────────────────\n"
-                   f"💹 <b>Total Portfolio:</b> ${self.virtual_balance + (self.virtual_crypto * self.current_price):.2f}\n\n"
+                   f"💹 <b>Total Portfolio:</b> ${self.balance_usdt + (self.balance_eth * self.current_price):.2f}\n\n"
                    f"🚀 May the new day bring great profits!")
             telegram_handler.send_telegram(msg)
             
@@ -900,7 +927,7 @@ class SmartGridBotDCA_v2_9:
 
             # 2. Buy at the bottom (Open new position)
             # Note: Balance is updated after _close_position so we can buy now
-            if self.virtual_balance >= grid['amount_usdt']:
+            if self.balance_usdt >= grid['amount_usdt']:
                 self._open_position(grid, current_price, timestamp)
                 # Special Telegram Message
                 msg = (f"🔄 <b>SWAP (Rebalancing) COMPLETED!</b>\n\n"
@@ -942,11 +969,6 @@ class SmartGridBotDCA_v2_9:
                 hysteresis = margin * 2
                 if (lower_bound + hysteresis) < current_price < (upper_bound - hysteresis):
                     self.grid_out_of_range_notified = False
-
-    def _print_status(self, price, ts):
-        total = self.virtual_balance + (self.virtual_crypto * price)
-        pnl = total - config.INVESTMENT
-        print(f"\r[{ts}] v{self.version} | Price: ${price:,.2f} | P/L: ${pnl:+.2f} | Pos: {len(self.open_positions)}", end="")
 
     def run(self):
         # OHLCV for initial EMA
