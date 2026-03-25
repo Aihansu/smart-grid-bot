@@ -70,6 +70,6 @@ COMPACT_MODE = False
 # Advanced Features
 AUTO_COMPOUND = True             # Automatically increase grid amounts as profits grow
 DAILY_REPORT_ENABLED = True      # Send daily summary report via Telegram
-ENABLE_REBALANCING = True        # Sell top losing position to buy lower when balance is depleted
+ENABLE_REBALANCING = True        # When cash drops below $50, sell top losing position to buy lower
 REBALANCING_MIN_DISTANCE_PCT = 2.0  # Minimum 2% price drop from last buy to trigger rebalancing
-MAX_OPEN_POSITIONS = 25          # Maximum open positions (prevents unlimited accumulation)
+MIN_CASH_BEFORE_REBALANCING = 50.0  # Swap triggers when cash drops below this amount (no position limit)

@@ -848,32 +848,19 @@ class SmartGridBotDCA_v3_0:
             telegram_handler.send_telegram(msg)
             self.trend_block_notified = False
 
-        # Maximum position limit check
-        if len(self.open_positions) >= config.MAX_OPEN_POSITIONS:
-            if not self.max_pos_notified:
-                telegram_handler.send_telegram(
-                    f"⚠️ <b>POSITION LIMIT</b>\n"
-                    f"Maximum {config.MAX_OPEN_POSITIONS} positions reached.\n"
-                    f"New buys stopped. Existing positions continue to sell.")
-                self.max_pos_notified = True
-        else:
-            if self.max_pos_notified:
-                self.max_pos_notified = False
-            for grid in sorted(self.grids, key=lambda x: x['price'], reverse=True):
-                if grid['status'] == 'waiting_buy' and curr_price <= grid['price']:
-                    if can_buy:
-                        if len(self.open_positions) >= config.MAX_OPEN_POSITIONS:
-                            break  # Check limit inside loop as well
-                        adjusted_amount = grid['amount_usdt'] * buy_multiplier
-                        adjusted_amount = max(adjusted_amount, 10.5)  # Binance minimum
-                        if self.balance_usdt >= adjusted_amount:
-                            self._open_position(grid, curr_price, timestamp, buy_multiplier)
-                        elif config.ENABLE_REBALANCING:
-                            # If balance insufficient and Rebalancing feature is active, check
+        # Grid Buy Check (no position limit — swap kicks in when cash drops below $50)
+        for grid in sorted(self.grids, key=lambda x: x['price'], reverse=True):
+            if grid['status'] == 'waiting_buy' and curr_price <= grid['price']:
+                if can_buy:
+                    adjusted_amount = grid['amount_usdt'] * buy_multiplier
+                    adjusted_amount = max(adjusted_amount, 10.5)  # Binance minimum
+                    if self.balance_usdt < config.MIN_CASH_BEFORE_REBALANCING:
+                        if config.ENABLE_REBALANCING:
                             self._check_for_rebalancing_swap(grid, curr_price, timestamp)
-                    else:
-                        self.stats['blocked_by_trend'] += 1
-                        # print(f"\r[{timestamp}] ⚠️ Buy blocked (Filter: {buy_reason})", end="")
+                    elif self.balance_usdt >= adjusted_amount:
+                        self._open_position(grid, curr_price, timestamp, buy_multiplier)
+                else:
+                    self.stats['blocked_by_trend'] += 1
         
         # 3. Grid Out-of-Range Check
         if config.AUTO_GRID_RESET:
@@ -906,22 +893,22 @@ class SmartGridBotDCA_v3_0:
             self.last_report_date = today
             self._save_state()
 
-    def _check_for_rebalancing_swap(self, grid, current_price, timestamp):
+    def _check_for_rebalancing_swap(self, grid, current_price, timestamp, reason="balance"):
         if not self.open_positions: return
-        
+
         # Check if price has dropped at least X% from last position's price (Safety Distance)
         last_pos = self.open_positions[-1]
         dist = ((current_price - last_pos['buy_price']) / last_pos['buy_price']) * 100
-        
+
         if dist <= -config.REBALANCING_MIN_DISTANCE_PCT:
             # Find the highest (most expensive) position
             highest_pos = max(self.open_positions, key=lambda x: x['buy_price'])
-            
+
             # No need if the new swap price is higher than the old price
             if current_price >= highest_pos['buy_price']: return
-            
+
             print(f"\n{Colors.warning('🔄 SWAP TRIGGERED: Sacrificing top position #' + str(highest_pos['id']))}")
-            
+
             # 1. Sell the top one (Free up balance)
             self._close_position(highest_pos, current_price, timestamp, "SWAP (Sell)")
 
@@ -930,8 +917,9 @@ class SmartGridBotDCA_v3_0:
             if self.balance_usdt >= grid['amount_usdt']:
                 self._open_position(grid, current_price, timestamp)
                 # Special Telegram Message
+                reason_text = f"Cash dropped below ${config.MIN_CASH_BEFORE_REBALANCING:.0f}, top position sacrificed."
                 msg = (f"🔄 <b>SWAP (Rebalancing) COMPLETED!</b>\n\n"
-                       f"📍 Top position sacrificed due to insufficient balance.\n"
+                       f"📍 {reason_text}\n"
                        f"❌ Sold: #{highest_pos['id']} (${highest_pos['buy_price']:,.2f})\n"
                        f"✅ New Buy: ${current_price:,.2f}\n"
                        f"🎯 Cost basis pulled much lower!")

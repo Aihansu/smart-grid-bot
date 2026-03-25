@@ -15,7 +15,7 @@ A fully automated **grid trading bot** for Binance with DCA strategy, trailing s
 | **Auto Compound** | Reinvests realized profits into larger grid amounts |
 | **Auto Grid Reset** | Regenerates grids when price moves out of range |
 | **Orphan System** | Old positions continue trading independently after grid reset |
-| **Rebalancing** | Sells the worst-performing position to free up capital for better entries |
+| **Rebalancing** | When cash drops below $50, sells the top losing position to buy lower |
 | **BNB Auto-Buy** | Automatically purchases BNB when balance is low to maintain fee discounts |
 | **Daily Reports** | Sends daily P/L summary via Telegram |
 | **Paper Trading** | Test the bot risk-free before going live |
@@ -152,8 +152,8 @@ All settings are in `config.py`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `AUTO_COMPOUND` | True | Reinvest profits into larger buys |
-| `ENABLE_REBALANCING` | True | Sell worst position to buy lower |
-| `MAX_OPEN_POSITIONS` | 25 | Position limit to prevent over-accumulation |
+| `ENABLE_REBALANCING` | True | Sell worst position to buy lower when cash is low |
+| `MIN_CASH_BEFORE_REBALANCING` | 50.0 | Swap triggers when cash drops below this amount |
 | `AUTO_GRID_RESET` | True | Auto-reset grids when price moves out of range |
 | `DAILY_REPORT_ENABLED` | True | Send daily summary via Telegram |
 
