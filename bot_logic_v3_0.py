@@ -223,25 +223,23 @@ class SmartGridBotDCA_v3_0:
             if not trades:
                 return None
             total_fee_usdt = 0.0
-            total_fee_bnb = 0.0
             for t in trades:
                 fee = t.get('fee', {})
                 fc = fee.get('cost', 0.0) or 0.0
                 curr = fee.get('currency', '')
-                if curr == 'BNB':
-                    total_fee_bnb += fc
-                elif curr == 'USDT':
+                if curr == 'USDT':
                     total_fee_usdt += fc
+                elif curr == 'BNB':
+                    # Calculate BNB fee as USDT using trade-time rate
+                    # Standard BNB discounted fee rate: 0.075%
+                    trade_cost = t.get('cost', 0)
+                    if trade_cost:
+                        total_fee_usdt += trade_cost * 0.00075
                 else:
                     price = t.get('price', 0)
                     if price:
                         total_fee_usdt += fc * price
-            bnb_val = 0.0
-            if total_fee_bnb > 0:
-                bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
-                if bnb_price:
-                    bnb_val = total_fee_bnb * bnb_price
-            return total_fee_usdt + bnb_val
+            return total_fee_usdt
         except:
             return None
 
@@ -375,6 +373,7 @@ class SmartGridBotDCA_v3_0:
 
         total_fee_usdt = 0.0
         total_fee_bnb = 0.0
+        bnb_usdt_value = 0.0
         buy_fee = 0.0
         sell_fee = 0.0
         trade_count = len(trades)
@@ -384,9 +383,17 @@ class SmartGridBotDCA_v3_0:
             fee_cost = fee.get('cost', 0.0) or 0.0
             fee_currency = fee.get('currency', '')
             side = trade.get('side', '')
+            trade_cost = trade.get('cost', 0)
 
             if fee_currency == 'BNB':
                 total_fee_bnb += fee_cost
+                # Calculate BNB fee as USDT using trade-time rate
+                fee_as_usdt = trade_cost * 0.00075 if trade_cost else 0
+                bnb_usdt_value += fee_as_usdt
+                if side == 'buy':
+                    buy_fee += fee_as_usdt
+                else:
+                    sell_fee += fee_as_usdt
             elif fee_currency == 'USDT':
                 total_fee_usdt += fee_cost
                 if side == 'buy':
@@ -403,13 +410,6 @@ class SmartGridBotDCA_v3_0:
                         buy_fee += fee_as_usdt
                     else:
                         sell_fee += fee_as_usdt
-
-        # Fetch current BNB price for BNB commissions
-        bnb_usdt_value = 0.0
-        if total_fee_bnb > 0:
-            bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
-            if bnb_price:
-                bnb_usdt_value = total_fee_bnb * bnb_price
 
         grand_total = total_fee_usdt + bnb_usdt_value
 
