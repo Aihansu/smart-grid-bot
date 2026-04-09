@@ -48,9 +48,10 @@ HYBRID_MODE = True
 EMA_PERIOD = 30
 
 # EMA Dynamic Buy Zones
-EMA_ZONE_WEAK = -0.7         # 0% to -0.7%: weak signal (0.75x)
-EMA_ZONE_NORMAL = -1.3       # -0.7% to -1.3%: normal signal (1x)
-EMA_ZONE_STRONG = -2         # -1.3% to -2%: strong dip (1.5x)
+EMA_ZONE_WEAK = -1.5         # 0% to -1.5%: weak signal (0.75x)
+EMA_ZONE_NORMAL = -3.0       # -1.5% to -3%: normal signal (1x)
+EMA_ZONE_STRONG = -5.0       # -3% to -5%: strong dip (1.5x)
+EMA_ZONE_EXPENSIVE = 5.0     # 5%+ above EMA: too expensive, don't buy
 EMA_ABOVE_MULTIPLIER = 0.5   # Above EMA: expensive, buy less
 EMA_WEAK_MULTIPLIER = 0.75   # Slight dip: buy a bit more
 EMA_NORMAL_MULTIPLIER = 1.0  # Normal dip: standard buy

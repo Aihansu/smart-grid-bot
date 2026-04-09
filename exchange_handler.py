@@ -48,10 +48,11 @@ class ExchangeHandler:
             return []
 
     def fetch_all_my_trades(self, symbol):
-        """Fetch ALL trade history from Binance (with pagination)"""
+        """Fetch ALL trade history from Binance (with pagination, from 2026-01-01)"""
         try:
             all_trades = []
-            since = None
+            # Start from 2026-01-01 (before bot launch)
+            since = 1735689600000  # 2026-01-01 00:00:00 UTC
             while True:
                 trades = self.exchange.fetch_my_trades(symbol, since=since, limit=1000)
                 if not trades:

@@ -45,6 +45,7 @@ class SmartGridBotDCA_v3_0:
         # Local state (non-persistent)
         self.current_price = 0
         self.last_sync_time = 0  # Balance sync timestamp
+        self.last_ema_update = 0  # EMA update timestamp
         self.price_history = deque(maxlen=config.EMA_PERIOD * 2)
         self.ema_value = None
         self.stats = {
@@ -217,75 +218,72 @@ class SmartGridBotDCA_v3_0:
             elif text == '/shutdown': self._cmd_shutdown()
 
     def _get_real_commission(self):
-        """Fetch real commission data from Binance (all trades)"""
+        """Fetch real commission data from Binance (returns BNB denomination)"""
         try:
             trades = self.exchange_handler.fetch_all_my_trades(config.SYMBOL)
             if not trades:
                 return None
-            total_fee_usdt = 0.0
+            total_fee_bnb = 0.0
             for t in trades:
                 fee = t.get('fee', {})
                 fc = fee.get('cost', 0.0) or 0.0
                 curr = fee.get('currency', '')
-                if curr == 'USDT':
-                    total_fee_usdt += fc
-                elif curr == 'BNB':
-                    # Calculate BNB fee as USDT using trade-time rate
-                    # Standard BNB discounted fee rate: 0.075%
-                    trade_cost = t.get('cost', 0)
-                    if trade_cost:
-                        total_fee_usdt += trade_cost * 0.00075
+                if curr == 'BNB':
+                    total_fee_bnb += fc
+                elif curr == 'USDT':
+                    # Convert USDT fee to BNB
+                    bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
+                    if bnb_price:
+                        total_fee_bnb += fc / bnb_price
                 else:
                     price = t.get('price', 0)
-                    if price:
-                        total_fee_usdt += fc * price
-            return total_fee_usdt
+                    bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
+                    if price and bnb_price:
+                        total_fee_bnb += (fc * price) / bnb_price
+            return total_fee_bnb
         except:
             return None
 
     def _cmd_status(self):
-        if not self.current_price: return telegram_handler.send_telegram("❌ Could not fetch price!")
-        total_value = self.balance_usdt + (self.balance_eth * self.current_price)
-        pnl = total_value - config.INVESTMENT
-        pnl_pct = (pnl / config.INVESTMENT) * 100 if config.INVESTMENT > 0 else 0
-        runtime = str(datetime.now() - self.start_time).split('.')[0]
+        try:
+            if not self.current_price: return telegram_handler.send_telegram("❌ Could not fetch price!")
+            total_value = self.balance_usdt + (self.balance_eth * self.current_price)
+            pnl = total_value - config.INVESTMENT
+            pnl_pct = (pnl / config.INVESTMENT) * 100 if config.INVESTMENT > 0 else 0
+            runtime = str(datetime.now() - self.start_time).split('.')[0]
 
-        # Fetch real commission from Binance
-        real_commission = self._get_real_commission()
+            base_asset = config.SYMBOL.split('/')[0]
+            crypto_value = self.balance_eth * self.current_price
 
-        # Gross profit = net profit + estimated commission (bot internal)
-        gross_profit_total = self.total_profit + self.total_commission
-        commission = real_commission if real_commission is not None else self.total_commission
-        net_profit_total = gross_profit_total - commission
-        commission_source = "Binance" if real_commission is not None else "Estimate"
+            bnb_balance = self.exchange_handler.get_balance('BNB')
+            bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
+            bnb_usd = bnb_balance * bnb_price if bnb_balance > 0 and bnb_price else 0
+            bnb_str = f"{bnb_balance:.4f} (~${bnb_usd:.2f}) {'⚠️' if bnb_usd < 5 else ''}"
 
-        base_asset = config.SYMBOL.split('/')[0]
-        crypto_value = self.balance_eth * self.current_price
+            gross_profit = self.total_profit + self.total_commission
+            net_profit = self.total_profit
 
-        bnb_balance = self.exchange_handler.get_balance('BNB')
-        bnb_price = self.exchange_handler.get_current_price('BNB/USDT')
-        bnb_usd = bnb_balance * bnb_price if bnb_balance > 0 and bnb_price else 0
-        bnb_str = f"{bnb_balance:.4f} (~${bnb_usd:.2f}) {'⚠️' if bnb_usd < 5 else ''}"
-
-        ema_str = f"{self.ema_value:,.2f}" if self.ema_value else "0.00"
-        msg = (f"📊 <b>BOT STATUS</b> {'⏸️' if self.paused else '✅'}\n\n"
-               f"💰 <b>Price:</b> ${self.current_price:,.2f} | 📈 <b>EMA:</b> ${ema_str}\n"
-               f"──────────────────\n"
-               f"💵 <b>Balance (USDT):</b> ${self.balance_usdt:.2f}\n"
-               f"🪙 <b>{base_asset}:</b> {self.balance_eth:.6f} (${crypto_value:.2f})\n"
-               f"🔶 <b>BNB (Fee):</b> {bnb_str}\n"
-               f"📊 <b>Total Portfolio:</b> ${total_value:.2f}\n"
-               f"{'📈' if pnl >= 0 else '📉'} <b>Overall P/L:</b> ${pnl:+.2f} ({pnl_pct:+.2f}%)\n"
-               f"──────────────────\n"
-               f"💵 <b>Gross Profit:</b> ${gross_profit_total:+.2f}\n"
-               f"💸 <b>Commission ({commission_source}):</b> ${commission:.2f}\n"
-               f"{'💰' if net_profit_total >= 0 else '📉'} <b>Net Profit:</b> ${net_profit_total:+.2f}\n"
-               f"──────────────────\n"
-               f"📍 <b>Open Positions:</b> {len(self.open_positions)}"
-               f"{' (🔸' + str(sum(1 for p in self.open_positions if p.get('grid_id', -1) == -1)) + ' orphan)' if any(p.get('grid_id', -1) == -1 for p in self.open_positions) else ''}"
-               f" | 🟢 <b>Empty Grids:</b> {sum(1 for g in self.grids if g['status'] == 'waiting_buy')}\n"
-               f"⏱️ <b>Uptime:</b> {runtime}")
-        telegram_handler.send_telegram(msg)
+            ema_str = f"{self.ema_value:,.2f}" if self.ema_value else "0.00"
+            msg = (f"📊 <b>BOT STATUS</b> {'⏸️' if self.paused else '✅'}\n\n"
+                   f"💰 <b>Price:</b> ${self.current_price:,.2f} | 📈 <b>EMA:</b> ${ema_str}\n"
+                   f"──────────────────\n"
+                   f"💵 <b>Balance (USDT):</b> ${self.balance_usdt:.2f}\n"
+                   f"🪙 <b>{base_asset}:</b> {self.balance_eth:.6f} (${crypto_value:.2f})\n"
+                   f"🔶 <b>BNB (Fee):</b> {bnb_str}\n"
+                   f"📊 <b>Total Portfolio:</b> ${total_value:.2f}\n"
+                   f"{'📈' if pnl >= 0 else '📉'} <b>Overall P/L:</b> ${pnl:+.2f} ({pnl_pct:+.2f}%)\n"
+                   f"──────────────────\n"
+                   f"💰 <b>Gross Profit:</b> ${gross_profit:+.2f}\n"
+                   f"{'💵' if net_profit >= 0 else '🔻'} <b>Net Profit:</b> ${net_profit:+.2f}\n"
+                   f"──────────────────\n"
+                   f"📍 <b>Open Positions:</b> {len(self.open_positions)}"
+                   f"{' (🔸' + str(sum(1 for p in self.open_positions if p.get('grid_id', -1) == -1)) + ' orphan)' if any(p.get('grid_id', -1) == -1 for p in self.open_positions) else ''}"
+                   f" | 🟢 <b>Empty Grids:</b> {sum(1 for g in self.grids if g['status'] == 'waiting_buy')}\n"
+                   f"⏱️ <b>Uptime:</b> {runtime}")
+            telegram_handler.send_telegram(msg)
+        except Exception as e:
+            print(f"❌ /status error: {e}")
+            telegram_handler.send_telegram(f"❌ /status error: {str(e)}")
 
     def _cmd_positions(self):
         if not self.open_positions: return telegram_handler.send_telegram("📍 No open positions.")
@@ -460,6 +458,7 @@ class SmartGridBotDCA_v3_0:
     def check_hybrid_filter(self, current_price):
         if not config.HYBRID_MODE or self.ema_value is None: return True, "ok", 1.0
         deviation = ((current_price - self.ema_value) / self.ema_value) * 100
+        if deviation >= config.EMA_ZONE_EXPENSIVE: return False, "expensive", 0
         if deviation >= 0: return True, "above_ema", config.EMA_ABOVE_MULTIPLIER
         if deviation >= config.EMA_ZONE_WEAK: return True, "weak_dip", config.EMA_WEAK_MULTIPLIER
         if deviation >= config.EMA_ZONE_NORMAL: return True, "normal_dip", config.EMA_NORMAL_MULTIPLIER
@@ -469,6 +468,7 @@ class SmartGridBotDCA_v3_0:
     def get_trend_indicator(self, current_price):
         if self.ema_value is None: return "⏳ ..."
         dev = ((current_price - self.ema_value) / self.ema_value) * 100
+        if dev >= config.EMA_ZONE_EXPENSIVE: return f"🚫 Expensive (+{dev:.1f}%) ❌"
         if dev >= 1: return f"📈 Uptrend (+{dev:.1f}%) 0.5x"
         if dev >= 0: return f"📊 Neutral ({dev:.1f}%) 0.5x"
         if dev >= config.EMA_ZONE_WEAK: return f"🔹 Weak Dip ({dev:.1f}%) 0.75x"
@@ -958,24 +958,37 @@ class SmartGridBotDCA_v3_0:
                 if (lower_bound + hysteresis) < current_price < (upper_bound - hysteresis):
                     self.grid_out_of_range_notified = False
 
+    def _update_ema_from_candles(self):
+        """Update EMA from 15-minute candles"""
+        try:
+            ohlcv = self.exchange_handler.fetch_ohlcv(config.SYMBOL, timeframe='15m', limit=config.EMA_PERIOD)
+            if ohlcv:
+                self.price_history.clear()
+                for c in ohlcv:
+                    self.price_history.append(c[4])
+                self.calculate_ema()
+                self.last_ema_update = time.time()
+        except Exception as e:
+            print(f"{Colors.warning('⚠️ EMA update error: ' + str(e))}")
+
     def run(self):
-        # OHLCV for initial EMA
-        ohlcv = self.exchange_handler.fetch_ohlcv(config.SYMBOL, limit=config.EMA_PERIOD)
-        for c in ohlcv: self.price_history.append(c[4])
-        
+        # OHLCV for initial EMA (15-minute candles)
+        self._update_ema_from_candles()
+
         # If grids empty, create them
         if not self.grids:
             self._create_grids(self.exchange_handler.get_current_price(config.SYMBOL))
-            
+
         self._print_keyboard_help()
         print(f"\n{Colors.success('🚀 Bot v' + self.version + ' Running...')}")
         while self.running:
             try:
                 self.check_and_execute()
-                # Check Telegram more frequently (every 0.5 seconds)
-                for _ in range(config.CHECK_INTERVAL * 2):
+                # Check Telegram every 3 seconds
+                for i in range(config.CHECK_INTERVAL * 2):
                     if not self.running: break
-                    self.process_telegram_commands(timeout=0)
+                    if i % 6 == 0:  # Every 6 iterations = every 3 seconds
+                        self.process_telegram_commands(timeout=0)
                     time.sleep(0.5)
             except KeyboardInterrupt:
                 self.running = False

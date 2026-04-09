@@ -56,7 +56,7 @@ def get_main_keyboard():
         'keyboard': [
             [{'text': '/status'}, {'text': '/positions'}],
             [{'text': '/stats'}, {'text': '/grids'}],
-            [{'text': '/help'}]
+            [{'text': '/commission'}, {'text': '/help'}]
         ],
         'resize_keyboard': True,
         'one_time_keyboard': False

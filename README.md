@@ -28,11 +28,12 @@ The bot adjusts buy amounts based on how far the price has dropped from the EMA 
 
 | Zone | EMA Distance | Multiplier | Meaning |
 |------|-------------|------------|---------|
-| Above EMA | > 0% | 0.5x | Price is expensive, buy less |
-| Weak Dip | 0% to -0.7% | 0.75x | Small dip, conserve capital |
-| Normal Dip | -0.7% to -1.3% | 1.0x | Standard buy amount |
-| Strong Dip | -1.3% to -2% | 1.5x | Deep dip, buy aggressively |
-| Hard Stop | below -2% | 0x | Crash protection, no buy |
+| Expensive | > +5% | 0x | Way above EMA, don't buy |
+| Above EMA | 0% to +5% | 0.5x | Price is expensive, buy less |
+| Weak Dip | 0% to -1.5% | 0.75x | Small dip, conserve capital |
+| Normal Dip | -1.5% to -3% | 1.0x | Standard buy amount |
+| Strong Dip | -3% to -5% | 1.5x | Deep dip, buy aggressively |
+| Hard Stop | below -5% | 0x | Crash protection, no buy |
 
 ---
 
@@ -142,6 +143,7 @@ All settings are in `config.py`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `EMA_PERIOD` | 30 | EMA calculation period |
+| `EMA_ZONE_EXPENSIVE` | 5.0 | Block buys when price is 5%+ above EMA |
 | `EMA_ABOVE_MULTIPLIER` | 0.5 | Buy multiplier when above EMA |
 | `EMA_WEAK_MULTIPLIER` | 0.75 | Buy multiplier for weak dip |
 | `EMA_NORMAL_MULTIPLIER` | 1.0 | Buy multiplier for normal dip |
