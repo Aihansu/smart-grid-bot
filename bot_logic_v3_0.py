@@ -785,13 +785,27 @@ class SmartGridBotDCA_v3_0:
         
         # 1. Check Positions (Sell / Trailing)
         for pos in self.open_positions[:]:
-            # Update highest price if reached
-            if curr_price > pos['highest_price']:
-                old_highest = pos['highest_price']
-                pos['highest_price'] = curr_price
+            # Check if Trailing phase started
+            if not pos['is_trailing'] and curr_price >= pos['sell_target']:
+                pos['is_trailing'] = True
+                pos['highest_price'] = curr_price  # Start tracking from trailing activation price
+                pos['trailing_notify_level'] = 1
+                callback_lock = curr_price * (1 - config.TRAILING_CALLBACK_PCT/100)
+                msg = (f"━━━━━━━━━━━━━━━━━━━\n"
+                       f"🎯 <b>TRAILING ACTIVE</b> #{pos['id']}\n"
+                       f"━━━━━━━━━━━━━━━━━━━\n"
+                       f"📍 Price: ${curr_price:,.2f}\n"
+                       f"🔒 Lock: ${callback_lock:,.2f} (-{config.TRAILING_CALLBACK_PCT}%)\n"
+                       f"━━━━━━━━━━━━━━━━━━━")
+                telegram_handler.send_telegram(msg)
+                print(f"\n{Colors.success('🚀 Trailing started: #' + str(pos['id']))}")
 
-                # Notify on every %1.2 increase while trailing is active
-                if pos['is_trailing']:
+            # If trailing: update highest and check callback
+            if pos['is_trailing']:
+                if curr_price > pos['highest_price']:
+                    pos['highest_price'] = curr_price
+
+                    # Notify on every %1.2 increase
                     notify_level = pos.get('trailing_notify_level', 1)
                     next_threshold = pos['buy_price'] * (1 + config.TRAILING_PROFIT_PCT * (notify_level + 1) / 100)
                     if curr_price >= next_threshold:
@@ -804,28 +818,10 @@ class SmartGridBotDCA_v3_0:
                                f"🔒 New Lock: ${new_callback:,.2f}\n"
                                f"💰 Profit: {profit_pct:.1f}%")
                         telegram_handler.send_telegram(msg)
-                
-            # Check if Trailing phase started
-            if not pos['is_trailing'] and curr_price >= pos['sell_target']:
-                pos['is_trailing'] = True
-                callback_lock = curr_price * (1 - config.TRAILING_CALLBACK_PCT/100)
-                msg = (f"━━━━━━━━━━━━━━━━━━━\n"
-                       f"🎯 <b>TRAILING ACTIVE</b> #{pos['id']}\n"
-                       f"━━━━━━━━━━━━━━━━━━━\n"
-                       f"📍 Price: ${curr_price:,.2f}\n"
-                       f"🔒 Lock: ${callback_lock:,.2f} (-{config.TRAILING_CALLBACK_PCT}%)\n"
-                       f"━━━━━━━━━━━━━━━━━━━")
-                telegram_handler.send_telegram(msg)
-                print(f"\n{Colors.success('🚀 Trailing started: #' + str(pos['id']))}")
-                
-            # If trailing, check for callback sell
-            if pos['is_trailing']:
+
                 callback_price = pos['highest_price'] * (1 - config.TRAILING_CALLBACK_PCT/100)
                 if curr_price <= callback_price:
                     self._close_position(pos, curr_price, timestamp, "Trailing Stop")
-            else:
-                # Normal target sell logic if price is high enough but we wait for trailing
-                pass
 
         # 2. Check Grids (Buy)
         can_buy, buy_reason, buy_multiplier = self.check_hybrid_filter(curr_price)
