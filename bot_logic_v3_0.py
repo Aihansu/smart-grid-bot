@@ -779,11 +779,13 @@ class SmartGridBotDCA_v3_0:
         if not config.PAPER_TRADING:
             self._sync_balances()
 
-        # Add current price to history for EMA calculation
-        self.price_history.append(curr_price)
-        self.calculate_ema()
-        
+        # EMA update (from 15-minute candles, every 15 minutes)
+        if time.time() - self.last_ema_update >= 900:
+            self._update_ema_from_candles()
+
         # 1. Check Positions (Sell / Trailing)
+        # First handle trailing activations and highest price updates
+        sell_candidates = []  # (pos, profit_pct) - positions that hit callback
         for pos in self.open_positions[:]:
             # Check if Trailing phase started
             if not pos['is_trailing'] and curr_price >= pos['sell_target']:
@@ -800,28 +802,35 @@ class SmartGridBotDCA_v3_0:
                 telegram_handler.send_telegram(msg)
                 print(f"\n{Colors.success('🚀 Trailing started: #' + str(pos['id']))}")
 
-            # If trailing: update highest and check callback
+            # If trailing: update highest price at +1.2% steps only (step-based)
+            # Keeps lock stable on small moves — gives positions breathing room
             if pos['is_trailing']:
-                if curr_price > pos['highest_price']:
+                notify_level = pos.get('trailing_notify_level', 1)
+                next_threshold = pos['buy_price'] * (1 + config.TRAILING_PROFIT_PCT * (notify_level + 1) / 100)
+                if curr_price >= next_threshold:
+                    # Crossed a step: raise highest price and lock, send notification
                     pos['highest_price'] = curr_price
-
-                    # Notify on every %1.2 increase
-                    notify_level = pos.get('trailing_notify_level', 1)
-                    next_threshold = pos['buy_price'] * (1 + config.TRAILING_PROFIT_PCT * (notify_level + 1) / 100)
-                    if curr_price >= next_threshold:
-                        pos['trailing_notify_level'] = notify_level + 1
-                        profit_pct = ((curr_price - pos['buy_price']) / pos['buy_price']) * 100
-                        new_callback = curr_price * (1 - config.TRAILING_CALLBACK_PCT/100)
-                        msg = (f"🔄 <b>TRAILING UPDATED</b> #{pos['id']}\n"
-                               f"──────────────────\n"
-                               f"📈 New High: ${curr_price:,.2f}\n"
-                               f"🔒 New Lock: ${new_callback:,.2f}\n"
-                               f"💰 Profit: {profit_pct:.1f}%")
-                        telegram_handler.send_telegram(msg)
+                    pos['trailing_notify_level'] = notify_level + 1
+                    profit_pct = ((curr_price - pos['buy_price']) / pos['buy_price']) * 100
+                    new_callback = curr_price * (1 - config.TRAILING_CALLBACK_PCT/100)
+                    msg = (f"🔄 <b>TRAILING UPDATED</b> #{pos['id']}\n"
+                           f"──────────────────\n"
+                           f"📈 New High: ${curr_price:,.2f}\n"
+                           f"🔒 New Lock: ${new_callback:,.2f}\n"
+                           f"💰 Profit: {profit_pct:.1f}%")
+                    telegram_handler.send_telegram(msg)
 
                 callback_price = pos['highest_price'] * (1 - config.TRAILING_CALLBACK_PCT/100)
                 if curr_price <= callback_price:
-                    self._close_position(pos, curr_price, timestamp, "Trailing Stop")
+                    profit_pct = ((curr_price - pos['buy_price']) / pos['buy_price']) * 100
+                    sell_candidates.append((pos, profit_pct))
+
+        # Sell only 1 position per cycle (most profitable one)
+        # Others are checked next cycle — if price recovers, they may be saved
+        if sell_candidates:
+            sell_candidates.sort(key=lambda x: x[1], reverse=True)
+            best_pos = sell_candidates[0][0]
+            self._close_position(best_pos, curr_price, timestamp, "Trailing Stop")
 
         # 2. Check Grids (Buy)
         can_buy, buy_reason, buy_multiplier = self.check_hybrid_filter(curr_price)
