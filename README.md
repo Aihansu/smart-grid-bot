@@ -8,7 +8,7 @@ A fully automated **grid trading bot** for Binance with DCA strategy, trailing s
 
 ## What's New (October 2026)
 
-- 🆕 **Smart buy sizing**: fixed base above a balance threshold, proportional below it, hard cap per buy (see Buy Sizing below)
+- 🆕 **Smart buy sizing**: fixed base above a balance threshold, proportional below it, hard cap per buy. The bot no longer burns through its cash early in a sharp drop (see "Why I added the threshold" below)
 - 🆕 **Live settings via Telegram**: `/settings`, `/threshold`, `/multiplier`, saved across restarts
 - 🆕 **Weekly and monthly reports**, plus the `/report` command
 - 🆕 **systemd service file** (`gridbot.service`) for running 24/7 on a server
@@ -71,6 +71,23 @@ Each buy = **base amount × zone multiplier**, capped at `MAX_BUY_USDT`. The bas
 | $5,000 (fixed) | $50 | $75 | $100 | $150 |
 
 New amounts take effect on the next grid reset (automatic, or `/reset`). Zone multipliers apply immediately.
+
+### Why I added the threshold 🆕
+
+While running this bot with real money, I noticed that in sharp, long drops the cash balance melted away far too fast. In the old version every buy was 10% of the balance (times the zone multiplier), so the more money you had, the bigger each buy got: a $4,000 balance meant $400–600 per buy. The bot spent almost all of its cash in the first few percent of a crash, close to the top, and had nothing left when prices were actually low.
+
+So I added the threshold and the per-buy cap. Above $1,000 the bot keeps buying in small, fixed amounts no matter how big the balance is. Extra cash no longer means bigger bets, it means **staying power**: the bot can keep buying much deeper into a drop.
+
+I tested it by running the bot's own code on a simulated worst case: a steady decline with no bounces, in the Normal Dip zone (1.0x).
+
+| Starting cash | Old version: cash runs out after | New version: cash runs out after | Cash spent in the first 10% of the drop (old → new) |
+|---------------|---------------------------------|---------------------------------|------------------------------------------------------|
+| $1,000 | -11% | -11% | 94% → 94% |
+| $2,000 | -13% | -16% | 94% → 88% |
+| $4,000 | -16% | -24% | 94% → 50% |
+| $8,000 | -18% | -38% | 94% → 25% |
+
+"Runs out" means cash falls below $50, the point where the bot switches to rebalancing (swap). With $1,000 or less nothing changes, because the bot stays in proportional mode. Real markets bounce: trailing stops sell on the way up and return cash, and the EMA hard stop pauses buying during crashes, so in practice the bot lasts longer than this worst case.
 
 ---
 
