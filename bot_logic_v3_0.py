@@ -41,7 +41,10 @@ class SmartGridBotDCA_v3_0:
         self.total_commission = 0.0
         self.start_time = datetime.now()
         self.last_report_date = datetime.now().strftime("%Y-%m-%d")
-        
+        self.last_week = datetime.now().strftime("%Y-W%W")
+        self.last_month = datetime.now().strftime("%Y-%m")
+        self.config_overrides = {}  # Settings changed via Telegram (survive restarts)
+
         # Local state (non-persistent)
         self.current_price = 0
         self.last_sync_time = 0  # Balance sync timestamp
@@ -52,7 +55,9 @@ class SmartGridBotDCA_v3_0:
             'total_buys': 0, 'total_sells': 0, 'blocked_by_trend': 0,
             'dip_buys': 0, 'max_drawdown': 0, 'winning_trades': 0, 'losing_trades': 0,
             'total_commission': 0.0,
-            'daily_stats': {'profit': 0.0, 'commission': 0.0, 'trades': 0}
+            'daily_stats': {'profit': 0.0, 'commission': 0.0, 'trades': 0, 'buys': 0, 'sells': 0},
+            'weekly_stats': {'profit': 0.0, 'commission': 0.0, 'trades': 0, 'buys': 0, 'sells': 0},
+            'monthly_stats': {'profit': 0.0, 'commission': 0.0, 'trades': 0, 'buys': 0, 'sells': 0}
         }
 
         # Try to load existing state
@@ -95,6 +100,9 @@ class SmartGridBotDCA_v3_0:
             'total_profit': self.total_profit,
             'total_commission': self.total_commission,
             'last_report_date': self.last_report_date,
+            'last_week': self.last_week,
+            'last_month': self.last_month,
+            'config_overrides': self.config_overrides,
             'grids': self.grids,
             'stats': self.stats,
             'filled_orders': self.filled_orders,
@@ -122,6 +130,12 @@ class SmartGridBotDCA_v3_0:
                     self.total_profit = state.get('total_profit', 0.0)
                     self.total_commission = state.get('total_commission', 0.0)
                     self.last_report_date = state.get('last_report_date', datetime.now().strftime("%Y-%m-%d"))
+                    self.last_week = state.get('last_week', datetime.now().strftime("%Y-W%W"))
+                    self.last_month = state.get('last_month', datetime.now().strftime("%Y-%m"))
+                    # Re-apply settings changed via Telegram (these override config.py)
+                    self.config_overrides = state.get('config_overrides', {})
+                    for _k, _v in self.config_overrides.items():
+                        setattr(config, _k, _v)
                     self.grids = state.get('grids', [])
                     
                     # Robust Stats Merging: Ensure all keys exist even when loading old state files
@@ -174,7 +188,7 @@ class SmartGridBotDCA_v3_0:
 
     def _print_banner(self):
         print(f"\n{Colors.CYAN}╔══════════════════════════════════════════════════════════════════╗{Colors.RESET}")
-        print(f"{Colors.CYAN}║  {Colors.BOLD}{Colors.WHITE}🤖 SMART GRID BOT v{self.version} - DCA MOD (Persistence){Colors.RESET}{Colors.CYAN}             ║{Colors.RESET}")
+        print(f"{Colors.CYAN}║  {Colors.BOLD}{Colors.WHITE}🤖 SMART GRID BOT v{self.version} - DCA MODE (Persistence){Colors.RESET}{Colors.CYAN}            ║{Colors.RESET}")
         print(f"{Colors.CYAN}║  {Colors.DIM}Continuous Buy/Sell + Trailing TP + State Persistence{Colors.RESET}{Colors.CYAN}            ║{Colors.RESET}")
         print(f"{Colors.CYAN}╚══════════════════════════════════════════════════════════════════╝{Colors.RESET}\n")
 
@@ -191,7 +205,7 @@ class SmartGridBotDCA_v3_0:
         print(f"   {Colors.highlight('g')} = Grid table | {Colors.highlight('p')} = Positions | {Colors.highlight('h')} = History")
         print(f"   {Colors.highlight('s')} = Statistics | {Colors.highlight('c')} = Clear screen | {Colors.highlight('q')} = Quit")
         print(f"\n{Colors.BOLD}📱 TELEGRAM COMMANDS:{Colors.RESET}")
-        print(f"   /status /positions /stats /grids /start /pause /shutdown /reset /help")
+        print(f"   /status /positions /stats /report /grids /settings /start /pause /shutdown /reset /help")
         print(f"{Colors.CYAN}{'─'*65}{Colors.RESET}\n")
 
     def process_telegram_commands(self, timeout=1):
@@ -213,6 +227,10 @@ class SmartGridBotDCA_v3_0:
             elif text == '/reset': self._cmd_reset()
             elif text == '/help': self._cmd_help()
             elif text == '/commission': self._cmd_commission()
+            elif text == '/report': self._cmd_report()
+            elif text == '/settings': self._cmd_settings()
+            elif text.startswith('/threshold'): self._cmd_threshold(text)
+            elif text.startswith('/multiplier'): self._cmd_multiplier(text)
             elif text == '/sellall': self._cmd_sellall()
             elif text.startswith('/sell '): self._cmd_sell_specific(text)
             elif text == '/shutdown': self._cmd_shutdown()
@@ -264,8 +282,27 @@ class SmartGridBotDCA_v3_0:
             net_profit = self.total_profit
 
             ema_str = f"{self.ema_value:,.2f}" if self.ema_value else "0.00"
+            if self.ema_value:
+                ema_dev = ((self.current_price - self.ema_value) / self.ema_value) * 100
+                # Zone detection (same thresholds as check_hybrid_filter)
+                if ema_dev >= config.EMA_ZONE_EXPENSIVE:
+                    zone_emoji, zone_name, zone_mult = "🚫", "Too Expensive", "0x"
+                elif ema_dev >= 0:
+                    zone_emoji, zone_name, zone_mult = "📈", "Above EMA", f"{config.EMA_ABOVE_MULTIPLIER}x"
+                elif ema_dev >= config.EMA_ZONE_WEAK:
+                    zone_emoji, zone_name, zone_mult = "🔹", "Weak Dip", f"{config.EMA_WEAK_MULTIPLIER}x"
+                elif ema_dev >= config.EMA_ZONE_NORMAL:
+                    zone_emoji, zone_name, zone_mult = "🟢", "Normal Dip", f"{config.EMA_NORMAL_MULTIPLIER}x"
+                elif ema_dev >= config.EMA_ZONE_STRONG:
+                    zone_emoji, zone_name, zone_mult = "🔥", "Strong Dip", f"{config.EMA_STRONG_MULTIPLIER}x"
+                else:
+                    zone_emoji, zone_name, zone_mult = "🛑", "Hard Stop", "0x"
+                ema_dev_str = (f"\n📐 <b>EMA Distance:</b> {ema_dev:+.2f}%"
+                               f"\n{zone_emoji} <b>Zone:</b> {zone_name} ({zone_mult})")
+            else:
+                ema_dev_str = ""
             msg = (f"📊 <b>BOT STATUS</b> {'⏸️' if self.paused else '✅'}\n\n"
-                   f"💰 <b>Price:</b> ${self.current_price:,.2f} | 📈 <b>EMA:</b> ${ema_str}\n"
+                   f"💰 <b>Price:</b> ${self.current_price:,.2f} | 📈 <b>EMA:</b> ${ema_str}{ema_dev_str}\n"
                    f"──────────────────\n"
                    f"💵 <b>Balance (USDT):</b> ${self.balance_usdt:.2f}\n"
                    f"🪙 <b>{base_asset}:</b> {self.balance_eth:.6f} (${crypto_value:.2f})\n"
@@ -287,26 +324,34 @@ class SmartGridBotDCA_v3_0:
 
     def _cmd_positions(self):
         if not self.open_positions: return telegram_handler.send_telegram("📍 No open positions.")
-        msg = f"📍 <b>OPEN POSITIONS</b>\n\n"
         total_pnl_usd = 0.0
         total_cost = 0.0
-        
+
+        # Telegram has a 4096-char limit; split the message into chunks when there are many positions
+        MAX_LEN = 3500
+        header = f"📍 <b>OPEN POSITIONS</b> ({len(self.open_positions)})\n\n"
+        chunk = header
         for pos in self.open_positions:
             pnl_pct = ((self.current_price - pos['buy_price']) / pos['buy_price']) * 100
             pnl_usd = (self.current_price - pos['buy_price']) * pos['crypto_amount']
             total_pnl_usd += pnl_usd
             cost = pos['buy_price'] * pos['crypto_amount']
             total_cost += cost
-            
+
             orphan_tag = " 🔸" if pos.get('grid_id', -1) == -1 else ""
-            msg += f"#{pos['id']}{orphan_tag}: ${pos['buy_price']:,.2f} | <b>Amount: ${cost:.2f}</b> → P/L: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)\n"
-            msg += f"   Sell individual: /sell {pos['id']}\n"
-            
+            line = (f"#{pos['id']}{orphan_tag}: ${pos['buy_price']:,.2f} | <b>Amount: ${cost:.2f}</b> → P/L: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)\n"
+                    f"   Sell individual: /sell {pos['id']}\n")
+            # If this line would exceed the limit, send the current chunk and start a new one
+            if len(chunk) + len(line) > MAX_LEN:
+                telegram_handler.send_telegram(chunk)
+                chunk = ""
+            chunk += line
+
         total_pnl_pct = (total_pnl_usd / total_cost) * 100 if total_cost > 0 else 0
-        msg += f"\n──────────────────\n"
-        msg += f"💰 <b>Total Cost: ${total_cost:.2f}</b>\n"
-        msg += f"📊 <b>Total P/L: ${total_pnl_usd:+.2f} ({total_pnl_pct:+.2f}%)</b>"
-        telegram_handler.send_telegram(msg)
+        chunk += f"\n──────────────────\n"
+        chunk += f"💰 <b>Total Cost: ${total_cost:.2f}</b>\n"
+        chunk += f"📊 <b>Total P/L: ${total_pnl_usd:+.2f} ({total_pnl_pct:+.2f}%)</b>"
+        telegram_handler.send_telegram(chunk)
 
     def _cmd_sellall(self):
         count = len(self.open_positions)
@@ -435,11 +480,94 @@ class SmartGridBotDCA_v3_0:
                 f"📌 <b>Difference:</b> ${abs(grand_total - self.total_commission):.2f}")
         telegram_handler.send_telegram(msg)
 
+    def _cmd_report(self):
+        """Live daily/weekly/monthly summary (current, not-yet-reset period data)"""
+        def block(emoji, title, label, s):
+            return (f"{emoji} <b>{title}</b> ({label})\n"
+                    f"💰 Net Profit: ${s['profit']:+.2f} | 💸 Comm: ${s['commission']:.2f}\n"
+                    f"🟢 Buys: {s.get('buys', 0)} | 🔴 Sells: {s.get('sells', 0)} | 🔄 Total: {s['trades']}\n")
+        portfolio = self.balance_usdt + (self.balance_eth * self.current_price)
+        msg = ("📊 <b>LIVE SUMMARY REPORT</b>\n"
+               "<i>(also sent automatically at the end of each period)</i>\n"
+               "──────────────────\n"
+               + block("📅", "TODAY", self.last_report_date, self.stats['daily_stats'])
+               + "──────────────────\n"
+               + block("📆", "THIS WEEK", self.last_week, self.stats['weekly_stats'])
+               + "──────────────────\n"
+               + block("🗓️", "THIS MONTH", self.last_month, self.stats['monthly_stats'])
+               + "──────────────────\n"
+               + f"💹 <b>Total Portfolio:</b> ${portfolio:.2f}")
+        telegram_handler.send_telegram(msg)
+
+    def _cmd_settings(self):
+        """Show current buy settings"""
+        msg = (f"⚙️ <b>BUY SETTINGS</b>\n"
+               f"──────────────────\n"
+               f"💵 Fixed base: ${config.FIXED_GRID_AMOUNT:.0f}\n"
+               f"📏 Threshold: ${config.FIXED_AMOUNT_THRESHOLD:.0f}\n"
+               f"   (above this balance: fixed base, below: proportional)\n"
+               f"🔒 Max single buy: ${config.MAX_BUY_USDT:.0f}\n"
+               f"──────────────────\n"
+               f"📈 Above EMA: {config.EMA_ABOVE_MULTIPLIER}x → ${min(config.FIXED_GRID_AMOUNT*config.EMA_ABOVE_MULTIPLIER, config.MAX_BUY_USDT):.0f}\n"
+               f"🔹 Weak Dip: {config.EMA_WEAK_MULTIPLIER}x → ${min(config.FIXED_GRID_AMOUNT*config.EMA_WEAK_MULTIPLIER, config.MAX_BUY_USDT):.0f}\n"
+               f"🟢 Normal Dip: {config.EMA_NORMAL_MULTIPLIER}x → ${min(config.FIXED_GRID_AMOUNT*config.EMA_NORMAL_MULTIPLIER, config.MAX_BUY_USDT):.0f}\n"
+               f"🔥 Strong Dip: {config.EMA_STRONG_MULTIPLIER}x → ${min(config.FIXED_GRID_AMOUNT*config.EMA_STRONG_MULTIPLIER, config.MAX_BUY_USDT):.0f}\n"
+               f"──────────────────\n"
+               f"Change:\n"
+               f"/threshold [amount] — e.g. /threshold 1500\n"
+               f"/multiplier [zone] [value] — e.g. /multiplier normal 1.3\n"
+               f"Zones: above, weak, normal, strong")
+        telegram_handler.send_telegram(msg)
+
+    def _cmd_threshold(self, text):
+        """Change the fixed-base threshold via Telegram"""
+        try:
+            val = float(text.split()[1].replace(',', '.'))
+            if not (0 <= val <= 100000): raise ValueError
+            config.FIXED_AMOUNT_THRESHOLD = val
+            self.config_overrides['FIXED_AMOUNT_THRESHOLD'] = val
+            self._save_state()
+            mode = "FIXED base" if self.balance_usdt > val else "PROPORTIONAL"
+            telegram_handler.send_telegram(
+                f"✅ <b>Threshold updated:</b> ${val:.0f}\n"
+                f"💵 Current balance: ${self.balance_usdt:.2f} → now in <b>{mode}</b> mode.")
+        except (IndexError, ValueError):
+            telegram_handler.send_telegram("❌ Usage: /threshold 1500")
+
+    def _cmd_multiplier(self, text):
+        """Change a zone multiplier via Telegram"""
+        zones = {'above': ('EMA_ABOVE_MULTIPLIER', '📈 Above EMA'),
+                 'weak': ('EMA_WEAK_MULTIPLIER', '🔹 Weak Dip'),
+                 'normal': ('EMA_NORMAL_MULTIPLIER', '🟢 Normal Dip'),
+                 'strong': ('EMA_STRONG_MULTIPLIER', '🔥 Strong Dip')}
+        try:
+            parts = text.split()
+            zone = parts[1].lower()
+            val = float(parts[2].replace(',', '.'))
+            if zone not in zones or not (0 < val <= 3): raise ValueError
+            key, label = zones[zone]
+            setattr(config, key, val)
+            self.config_overrides[key] = val
+            self._save_state()
+            example = min(config.FIXED_GRID_AMOUNT * val, config.MAX_BUY_USDT)
+            telegram_handler.send_telegram(
+                f"✅ <b>{label} multiplier:</b> {val}x\n"
+                f"💵 Buy in fixed mode: ${example:.0f} (cap ${config.MAX_BUY_USDT:.0f})")
+        except (IndexError, ValueError):
+            telegram_handler.send_telegram(
+                "❌ Usage: /multiplier [zone] [value]\n"
+                "Zones: above, weak, normal, strong\n"
+                "e.g. /multiplier normal 1.3")
+
     def _cmd_help(self):
         msg = ("📋 <b>COMMANDS</b>\n"
                "/status - General status\n"
                "/positions - Open positions\n"
                "/stats - Statistics\n"
+               "/report - Daily/weekly/monthly summary\n"
+               "/settings - Buy settings (threshold/multipliers)\n"
+               "/threshold [amount] - Change threshold\n"
+               "/multiplier [zone] [value] - Change multiplier\n"
                "/commission - Real commission report\n"
                "/sellall - Sell all\n"
                "/sell [id] - Sell specific\n"
@@ -469,32 +597,42 @@ class SmartGridBotDCA_v3_0:
         if self.ema_value is None: return "⏳ ..."
         dev = ((current_price - self.ema_value) / self.ema_value) * 100
         if dev >= config.EMA_ZONE_EXPENSIVE: return f"🚫 Expensive (+{dev:.1f}%) ❌"
-        if dev >= 1: return f"📈 Uptrend (+{dev:.1f}%) 0.5x"
-        if dev >= 0: return f"📊 Neutral ({dev:.1f}%) 0.5x"
-        if dev >= config.EMA_ZONE_WEAK: return f"🔹 Weak Dip ({dev:.1f}%) 0.75x"
-        if dev >= config.EMA_ZONE_NORMAL: return f"🟢 Normal Dip ({dev:.1f}%) 1x"
-        if dev >= config.EMA_ZONE_STRONG: return f"🔥 Strong Dip ({dev:.1f}%) 1.5x"
+        if dev >= 1: return f"📈 Uptrend (+{dev:.1f}%) {config.EMA_ABOVE_MULTIPLIER}x"
+        if dev >= 0: return f"📊 Neutral ({dev:.1f}%) {config.EMA_ABOVE_MULTIPLIER}x"
+        if dev >= config.EMA_ZONE_WEAK: return f"🔹 Weak Dip ({dev:.1f}%) {config.EMA_WEAK_MULTIPLIER}x"
+        if dev >= config.EMA_ZONE_NORMAL: return f"🟢 Normal Dip ({dev:.1f}%) {config.EMA_NORMAL_MULTIPLIER}x"
+        if dev >= config.EMA_ZONE_STRONG: return f"🔥 Strong Dip ({dev:.1f}%) {config.EMA_STRONG_MULTIPLIER}x"
         return f"🔴 Hard Stop ({dev:.1f}%) ❌"
 
     def _create_grids(self, center_price):
         self.grids = []
         
         # Per-grid investment amount calculation
-        if config.AUTO_COMPOUND:
-            # Only distribute current USDT balance across grids
+        # Threshold logic: if balance is ABOVE FIXED_AMOUNT_THRESHOLD, use the fixed base
+        # (lots of cash → brake so buys don't grow). If BELOW, buy proportionally to the current balance.
+        fixed_amount = getattr(config, 'FIXED_GRID_AMOUNT', 0)
+        threshold = getattr(config, 'FIXED_AMOUNT_THRESHOLD', 0)
+        if fixed_amount > 0 and self.balance_usdt > threshold:
+            amount_per_grid = fixed_amount
+        elif config.AUTO_COMPOUND:
+            # Balance below threshold → distribute current USDT across grids proportionally
             # Orphan positions' value is already held as ETH
             available_for_grids = self.balance_usdt
             amount_per_grid = available_for_grids / config.GRID_COUNT
         else:
             amount_per_grid = config.INVESTMENT / config.GRID_COUNT
-            
+
         step = (center_price * config.GRID_SPREAD * 2) / config.GRID_COUNT
         lower = center_price * (1 - config.GRID_SPREAD)
+        # Float rounding tolerance: at some prices the center line (price == center_price) was
+        # wrongly counted as "below price" due to floating-point error and turned green.
+        # A relative epsilon keeps the center line always empty → consistent grid count.
+        epsilon = center_price * 1e-9
         for i in range(config.GRID_COUNT + 1):
             price = lower + (step * i)
             # Safety Check: Ensure amount per grid is not below Binance minimum (~$10)
-            safe_amount = max(amount_per_grid, 10.5) 
-            self.grids.append({'id': i, 'price': price, 'amount_usdt': safe_amount, 'status': 'waiting_buy' if price < center_price else 'empty'})
+            safe_amount = max(amount_per_grid, 10.5)
+            self.grids.append({'id': i, 'price': price, 'amount_usdt': safe_amount, 'status': 'waiting_buy' if price < center_price - epsilon else 'empty'})
         
         # Mark old positions as orphans (independent from grids)
         # These positions continue to sell at their own sell_target/trailing targets
@@ -505,6 +643,10 @@ class SmartGridBotDCA_v3_0:
 
     def _open_position(self, grid, price, timestamp, buy_multiplier=1.0):
         adjusted_amount = grid['amount_usdt'] * buy_multiplier
+        # Hard cap: can never exceed MAX_BUY_USDT, even after the multiplier (safety brake)
+        max_buy = getattr(config, 'MAX_BUY_USDT', 0)
+        if max_buy > 0:
+            adjusted_amount = min(adjusted_amount, max_buy)
         adjusted_amount = max(adjusted_amount, 10.5)  # Binance minimum
         crypto = adjusted_amount / price
         # Real Order Submission
@@ -551,8 +693,10 @@ class SmartGridBotDCA_v3_0:
             self.balance_eth += crypto
 
         self.total_commission += fee
-        self.stats['daily_stats']['commission'] += fee
-        self.stats['daily_stats']['trades'] += 1
+        for _p in ('daily_stats', 'weekly_stats', 'monthly_stats'):
+            self.stats[_p]['commission'] += fee
+            self.stats[_p]['trades'] += 1
+            self.stats[_p]['buys'] += 1
         grid['status'] = 'filled'
         self.position_counter += 1
         pos = {
@@ -665,13 +809,20 @@ class SmartGridBotDCA_v3_0:
             self.balance_usdt += net_usdt
             self.balance_eth -= sell_amount
 
-        profit = net_usdt - pos.get('entry_cost', pos['buy_price'] * pos['crypto_amount'])
+        # Net profit = gross - commission. (When fees are paid in BNB, net_usdt == usdt_val, so
+        # total_profit used to record the gross amount; now it matches the net shown in Telegram)
+        entry_cost = pos.get('entry_cost', pos['buy_price'] * pos['crypto_amount'])
+        gross_profit = usdt_val - entry_cost
+        net_profit = gross_profit - fee
+        profit = net_profit
         self.total_commission += fee
         self.total_profit += profit
-        self.stats['daily_stats']['profit'] += profit
-        self.stats['daily_stats']['commission'] += fee
-        self.stats['daily_stats']['trades'] += 1
-        
+        for _p in ('daily_stats', 'weekly_stats', 'monthly_stats'):
+            self.stats[_p]['profit'] += profit
+            self.stats[_p]['commission'] += fee
+            self.stats[_p]['trades'] += 1
+            self.stats[_p]['sells'] += 1
+
         self.stats['total_sells'] += 1
         self.filled_orders.append({'type': 'sell', 'id': pos['id'], 'price': price, 'profit': profit, 'time': timestamp})
         
@@ -690,11 +841,9 @@ class SmartGridBotDCA_v3_0:
             self.open_positions.remove(pos)
             
         self._save_state()
-        
-        entry_cost = pos.get('entry_cost', pos['buy_price'] * pos['crypto_amount'])
+
+        # gross_profit, net_profit, entry_cost computed above (identical to what total_profit records)
         pnl_pct = ((price/pos['buy_price'])-1)*100
-        gross_profit = usdt_val - entry_cost
-        net_profit = gross_profit - fee  # Always: gross - commission = real net
         emoji = "💰" if net_profit >= 0 else "📉"
         net_emoji = '✅' if net_profit >= 0 else '❌'
         msg = (f"━━━━━━━━━━━━━━━━━━━\n"
@@ -793,10 +942,13 @@ class SmartGridBotDCA_v3_0:
                 pos['highest_price'] = curr_price  # Start tracking from trailing activation price
                 pos['trailing_notify_level'] = 1
                 callback_lock = curr_price * (1 - config.TRAILING_CALLBACK_PCT/100)
+                pos_cost = pos.get('entry_cost', pos['buy_price'] * pos['crypto_amount'])
+                pos_value = pos['crypto_amount'] * curr_price
                 msg = (f"━━━━━━━━━━━━━━━━━━━\n"
                        f"🎯 <b>TRAILING ACTIVE</b> #{pos['id']}\n"
                        f"━━━━━━━━━━━━━━━━━━━\n"
                        f"📍 Price: ${curr_price:,.2f}\n"
+                       f"💵 Position: ${pos_cost:.2f} → ${pos_value:.2f}\n"
                        f"🔒 Lock: ${callback_lock:,.2f} (-{config.TRAILING_CALLBACK_PCT}%)\n"
                        f"━━━━━━━━━━━━━━━━━━━")
                 telegram_handler.send_telegram(msg)
@@ -813,9 +965,12 @@ class SmartGridBotDCA_v3_0:
                     pos['trailing_notify_level'] = notify_level + 1
                     profit_pct = ((curr_price - pos['buy_price']) / pos['buy_price']) * 100
                     new_callback = curr_price * (1 - config.TRAILING_CALLBACK_PCT/100)
+                    pos_cost = pos.get('entry_cost', pos['buy_price'] * pos['crypto_amount'])
+                    pos_value = pos['crypto_amount'] * curr_price
                     msg = (f"🔄 <b>TRAILING UPDATED</b> #{pos['id']}\n"
                            f"──────────────────\n"
                            f"📈 New High: ${curr_price:,.2f}\n"
+                           f"💵 Position: ${pos_cost:.2f} → ${pos_value:.2f}\n"
                            f"🔒 New Lock: ${new_callback:,.2f}\n"
                            f"💰 Profit: {profit_pct:.1f}%")
                     telegram_handler.send_telegram(msg)
@@ -858,6 +1013,9 @@ class SmartGridBotDCA_v3_0:
             if grid['status'] == 'waiting_buy' and curr_price <= grid['price']:
                 if can_buy:
                     adjusted_amount = grid['amount_usdt'] * buy_multiplier
+                    max_buy = getattr(config, 'MAX_BUY_USDT', 0)
+                    if max_buy > 0:
+                        adjusted_amount = min(adjusted_amount, max_buy)
                     adjusted_amount = max(adjusted_amount, 10.5)  # Binance minimum
                     if self.balance_usdt < config.MIN_CASH_BEFORE_REBALANCING:
                         if config.ENABLE_REBALANCING:
@@ -879,23 +1037,47 @@ class SmartGridBotDCA_v3_0:
         pnl = total - config.INVESTMENT
         print(f"\r[{timestamp}] v{self.version} | Price: ${curr_price:,.2f} | P/L: ${pnl:+.2f} | Pos: {len(self.open_positions)}", end="")
 
+    def _send_period_report(self, title, emoji, period_label, stats_key, footer):
+        """Shared report sender (daily/weekly/monthly)"""
+        s = self.stats[stats_key]
+        portfolio = self.balance_usdt + (self.balance_eth * self.current_price)
+        msg = (f"{emoji} <b>{title}</b> ({period_label})\n"
+               f"──────────────────\n"
+               f"💰 <b>Net Profit:</b> ${s['profit']:+.2f}\n"
+               f"💸 <b>Commission:</b> ${s['commission']:.2f}\n"
+               f"🟢 <b>Buys:</b> {s.get('buys', 0)} | 🔴 <b>Sells:</b> {s.get('sells', 0)}\n"
+               f"🔄 <b>Total Trades:</b> {s['trades']}\n"
+               f"──────────────────\n"
+               f"💹 <b>Total Portfolio:</b> ${portfolio:.2f}\n\n"
+               f"{footer}")
+        telegram_handler.send_telegram(msg)
+
     def _check_daily_report(self):
+        # Daily report
         today = datetime.now(TZ_UTC).strftime("%Y-%m-%d")
         if today != self.last_report_date:
-            daily = self.stats['daily_stats']
-            msg = (f"📅 <b>DAILY SUMMARY REPORT</b> ({self.last_report_date})\n"
-                   f"──────────────────\n"
-                   f"💰 <b>Net Profit:</b> ${daily['profit']:+.2f}\n"
-                   f"💸 <b>Commission:</b> ${daily['commission']:.2f}\n"
-                   f"🔄 <b>Trade Count:</b> {daily['trades']}\n"
-                   f"──────────────────\n"
-                   f"💹 <b>Total Portfolio:</b> ${self.balance_usdt + (self.balance_eth * self.current_price):.2f}\n\n"
-                   f"🚀 May the new day bring great profits!")
-            telegram_handler.send_telegram(msg)
-            
-            # Reset daily stats
-            self.stats['daily_stats'] = {'profit': 0.0, 'commission': 0.0, 'trades': 0}
+            self._send_period_report("DAILY SUMMARY REPORT", "📅", self.last_report_date,
+                                     'daily_stats', "🚀 May the new day bring great profits!")
+            self.stats['daily_stats'] = {'profit': 0.0, 'commission': 0.0, 'trades': 0, 'buys': 0, 'sells': 0}
             self.last_report_date = today
+            self._save_state()
+
+        # Weekly report (at the start of each new week)
+        this_week = datetime.now(TZ_UTC).strftime("%Y-W%W")
+        if this_week != self.last_week:
+            self._send_period_report("WEEKLY SUMMARY REPORT", "📆", self.last_week,
+                                     'weekly_stats', "📊 Have a great new week!")
+            self.stats['weekly_stats'] = {'profit': 0.0, 'commission': 0.0, 'trades': 0, 'buys': 0, 'sells': 0}
+            self.last_week = this_week
+            self._save_state()
+
+        # Monthly report (at the start of each new month)
+        this_month = datetime.now(TZ_UTC).strftime("%Y-%m")
+        if this_month != self.last_month:
+            self._send_period_report("MONTHLY SUMMARY REPORT", "🗓️", self.last_month,
+                                     'monthly_stats', "🎯 May the new month bring great profits!")
+            self.stats['monthly_stats'] = {'profit': 0.0, 'commission': 0.0, 'trades': 0, 'buys': 0, 'sells': 0}
+            self.last_month = this_month
             self._save_state()
 
     def _check_for_rebalancing_swap(self, grid, current_price, timestamp, reason="balance"):

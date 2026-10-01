@@ -37,6 +37,15 @@ INVESTMENT = 1000                # Total investment in USDT
 GRID_COUNT = int(os.environ.get('GRID_COUNT', '10'))
 GRID_SPREAD = 0.025              # 2.5% grid spacing
 
+# Fixed buy base: base amount for each grid buy (zone multipliers are applied on top)
+# e.g. base 100 → above EMA 0.5x=50, weak dip 0.75x=75, normal dip 1x=100, strong dip 1.5x=150
+# ONLY used while cash balance is above FIXED_AMOUNT_THRESHOLD (brake: buys don't grow as cash grows).
+# Below the threshold → buys are proportional to the current balance (AUTO_COMPOUND logic).
+FIXED_GRID_AMOUNT = 100.0
+FIXED_AMOUNT_THRESHOLD = 1000.0  # Above this balance: fixed base; below: proportional
+# Hard cap per single buy (can never be exceeded, even after multipliers - safety brake)
+MAX_BUY_USDT = 150.0
+
 # DCA Mode - Stop Loss Disabled
 STOP_LOSS_ENABLED = False
 STOP_LOSS_PCT = 100
@@ -69,8 +78,8 @@ SHOW_GRID_TABLE = True
 COMPACT_MODE = False
 
 # Advanced Features
-AUTO_COMPOUND = True             # Automatically increase grid amounts as profits grow
-DAILY_REPORT_ENABLED = True      # Send daily summary report via Telegram
+AUTO_COMPOUND = True             # Below FIXED_AMOUNT_THRESHOLD: grid amounts scale with current balance
+DAILY_REPORT_ENABLED = True      # Send daily/weekly/monthly summary reports via Telegram
 ENABLE_REBALANCING = True        # When cash drops below $50, sell top losing position to buy lower
 REBALANCING_MIN_DISTANCE_PCT = 2.0  # Minimum 2% price drop from last buy to trigger rebalancing
 MIN_CASH_BEFORE_REBALANCING = 50.0  # Swap triggers when cash drops below this amount (no position limit)
